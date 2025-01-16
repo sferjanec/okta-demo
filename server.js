@@ -4,6 +4,7 @@ const axios = require("axios");
 const dotenv = require("dotenv");
 const crypto = require("crypto");
 const proxy = require("express-http-proxy");
+const cors = require("cors");
 
 dotenv.config();
 
@@ -20,6 +21,14 @@ app.use(
     cookie: {
       secure: process.env.NODE_ENV === "production",
     }
+  })
+);
+
+// allow cors request from localhost
+app.use(
+  cors({
+    origin: "http://localhost:4300", // Replace with your React app's URL
+    credentials: true, // Allow cookies and credentials to be sent
   })
 );
 
@@ -60,22 +69,68 @@ app.get("/login", (req, res) => {
   req.session.state = state;
   req.session.nonce = nonce;
 
-  const queryParams = new URLSearchParams({
-    response_type: "code",
-    client_id: CLIENT_ID,
-    redirect_uri: REDIRECT_URI,
-    scope: "openid profile email",
-    state,
-    nonce,
-  });
+  const authUrl = `${ISSUER_URI}/v1/authorize?` +
+    new URLSearchParams({
+      response_type: "code",
+      client_id: CLIENT_ID,
+      redirect_uri: REDIRECT_URI,
+      scope: "openid profile email",
+      state: state,
+      nonce: nonce,
+    }).toString();
 
-  // Build the authorization URL pointing directly to Okta
-  const authUrl = `${ISSUER_URI}/v1/authorize?${queryParams.toString()}`;
-  console.log("Rewritten Path:", authUrl); // Log the rewritten path
-  
-  res.redirect(authUrl);
+  console.log("Redirecting to authorization URL:", authUrl);
+
+  res.redirect(authUrl); // Redirect the user to Okta's `/authorize`
 });
 
+app.get("/callback", async (req, res) => {
+  const { code, state } = req.query;
+
+  console.log("Authorization Code Received:", code);
+  console.log("State Received:", state);
+
+  // Validate the state parameter
+  if (state !== req.session.state) {
+    return res.status(400).send("Invalid state parameter.");
+  }
+
+  try {
+    // Exchange the authorization code for tokens
+    const tokenResponse = await fetch(`${ISSUER_URI}/v1/token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "authorization_code",
+        client_id: CLIENT_ID,
+        client_secret: CLIENT_SECRET,
+        redirect_uri: "http://localhost:3000/callback",
+        code: code,
+      }),
+    });
+
+    if (!tokenResponse.ok) {
+      const errorData = await tokenResponse.text();
+      console.error("Token Exchange Failed:", errorData);
+      return res.status(500).send("Failed to exchange authorization code.");
+    }
+
+    const tokenData = await tokenResponse.json();
+    console.log("Token Response:", tokenData);
+
+    // Store tokens in the session
+    req.session.tokens = tokenData;
+
+    // Redirect back to the frontend
+    res.redirect(FRONTEND_URL);
+  } catch (error) {
+    console.error("Error during token exchange:", error.message);
+    res.status(500).send("An unexpected error occurred.");
+  }
+});
+
+
+// *** currently not functional ****
 app.get(
   "/test-okta",
   proxy(OKTA_DOMAIN, {
@@ -117,38 +172,109 @@ app.get(
   })
 );
 
-app.get("/callback", (req, res) => {
+app.get("/callback", async (req, res) => {
   const { code, state } = req.query;
 
-  // Verify state to prevent CSRF attacks
+  console.log("Authorization Code Received:", code);
+  console.log("State Received:", state);
+
+  // Validate the state parameter
   if (state !== req.session.state) {
-    return res.status(400).send("Invalid state. Possible CSRF attack.");
-  }
-
-  // Redirect to the frontend with the authorization code for testing purposes
-  console.log("Authorization code received:", code);
-  res.redirect(`${FRONTEND_URL}?code=${code}`);
-});
-
-// retrieve id tokens using authorization code
-app.get("/exchange-tokens", async (req, res) => {
-  const { code } = req.query;
-
-  if (!code) {
-    return res.status(400).send("Authorization code is required.");
+    return res.status(400).send("Invalid state parameter.");
   }
 
   try {
-    const tokens = await exchangeAuthorizationCodeForTokens(code);
-    console.log("Tokens received:", tokens);
+    // Exchange the authorization code for tokens
+    const tokenResponse = await fetch(`${ISSUER_URI}/v1/token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "authorization_code",
+        client_id: CLIENT_ID,
+        client_secret: CLIENT_SECRET,
+        redirect_uri: "http://localhost:3000/callback",
+        code: code,
+      }),
+    });
 
-    req.session.tokens = tokens;
+    if (!tokenResponse.ok) {
+      const errorData = await tokenResponse.text();
+      console.error("Token Exchange Failed:", errorData);
+      return res.status(500).send("Failed to exchange authorization code.");
+    }
 
-    res.json({ message: "Token exchange successful", tokens });
+    const tokenData = await tokenResponse.json();
+    console.log("Token Response:", tokenData);
+
+    // Store tokens in the session
+    req.session.tokens = tokenData;
+
+    // Redirect back to the frontend
+    res.redirect("http://localhost:4300");
   } catch (error) {
-    res.status(500).send(error.message);
+    console.error("Error during token exchange:", error.message);
+    res.status(500).send("An unexpected error occurred.");
   }
 });
+
+app.get("/tokens", (req, res) => {
+  if (!req.session.tokens) {
+    return res.status(401).send("No tokens available. Please log in.");
+  }
+
+  // Send tokens to the client
+  res.json({
+    access_token: req.session.tokens.access_token,
+    id_token: req.session.tokens.id_token,
+    expires_in: req.session.tokens.expires_in,
+  });
+});
+
+
+// app.get("/tokens", async (req, res) => {
+//   const { authCode } = req.session;
+
+//   if (!authCode) {
+//     return res.status(400).send("Authorization code is missing or expired.");
+//   }
+
+//   try {
+     // Exchange the authorization code for tokens
+//     const tokenResponse = await fetch(`${ISSUER_URI}/v1/token`, {
+//       method: "POST",
+//       headers: { "Content-Type": "application/x-www-form-urlencoded" },
+//       body: new URLSearchParams({
+//         grant_type: "authorization_code",
+//         client_id: CLIENT_ID,
+//         client_secret: CLIENT_SECRET,
+//         redirect_uri: REDIRECT_URI,
+//         code: authCode,
+//       }),
+//     });
+
+//     if (!tokenResponse.ok) {
+//       const errorData = await tokenResponse.text();
+//       console.error("Token Exchange Failed:", errorData);
+//       return res.status(500).send("Failed to exchange authorization code.");
+//     }
+
+//     const tokenData = await tokenResponse.json();
+//     console.log("Token Response:", tokenData);
+
+//     // Clear the authorization code from the session
+//     req.session.authCode = null;
+
+//     // Return tokens to the client
+//     res.json({
+//       access_token: tokenData.access_token,
+//       id_token: tokenData.id_token,
+//       expires_in: tokenData.expires_in,
+//     });
+//   } catch (error) {
+//     console.error("Error during token exchange:", error.message);
+//     res.status(500).send("An unexpected error occurred.");
+//   }
+// });
 
 
 const PORT = process.env.PORT || 3000;
