@@ -122,7 +122,7 @@ app.get("/callback", async (req, res) => {
     req.session.tokens = tokenData;
 
     // Redirect back to the frontend
-    res.redirect(FRONTEND_URL);
+    res.redirect(`${FRONTEND_URL}?success=true&code=${code}`);
   } catch (error) {
     console.error("Error during token exchange:", error.message);
     res.status(500).send("An unexpected error occurred.");
@@ -130,92 +130,50 @@ app.get("/callback", async (req, res) => {
 });
 
 
-// *** currently not functional ****
-app.get(
-  "/test-okta",
-  proxy(OKTA_DOMAIN, {
-    proxyReqPathResolver: (req) => {
-      const state = generateRandomValue();
-      const nonce = generateRandomValue();
+// app.get("/callback", async (req, res) => {
+//   const { code, state } = req.query;
 
-      req.session.state = state;
-      req.session.nonce = nonce;
+//   console.log("Authorization Code Received:", code);
+//   console.log("State Received:", state);
 
-      const queryParams = new URLSearchParams({
-        response_type: "code",
-        client_id: CLIENT_ID,
-        redirect_uri: REDIRECT_URI,
-        scope: "openid profile email",
-        state,
-        nonce,
-      });
+//   // Validate the state parameter
+//   if (state !== req.session.state) {
+//     return res.status(400).send("Invalid state parameter.");
+//   }
 
-      const resolvedPath = `/oauth2/default/v1/authorize?${queryParams.toString()}`;
-      console.log("Rewritten Path:", resolvedPath); // Log the rewritten path
-      return resolvedPath;
-    },
-    proxyReqOptDecorator: (proxyReqOpts) => {
-      // Explicitly set the Host header to match the Okta domain
-      proxyReqOpts.headers["Host"] = OKTA_DOMAIN.replace(/^https?:\/\//, ""); // Remove protocol
-      proxyReqOpts.headers["X-Custom-Header"] = "TestingOktaRewrite";
+//   try {
+//     // Exchange the authorization code for tokens
+//     const tokenResponse = await fetch(`${ISSUER_URI}/v1/token`, {
+//       method: "POST",
+//       headers: { "Content-Type": "application/x-www-form-urlencoded" },
+//       body: new URLSearchParams({
+//         grant_type: "authorization_code",
+//         client_id: CLIENT_ID,
+//         client_secret: CLIENT_SECRET,
+//         redirect_uri: "http://localhost:3000/callback",
+//         code: code,
+//       }),
+//     });
 
-      // set the user agent to mimic Chrome or other modern browser, to try and solve internal server error when using proxy() rewrite
-      proxyReqOpts.headers["User-Agent"] =
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36";
-  
-      console.log("Rewritten Host:", proxyReqOpts.headers["Host"]);
-      console.log("Headers being sent:", proxyReqOpts.headers);
-      return proxyReqOpts;
-    },
-    // Enable verbose logging to debug issues with the proxy request
-    verbose: true,
-  })
-);
+//     if (!tokenResponse.ok) {
+//       const errorData = await tokenResponse.text();
+//       console.error("Token Exchange Failed:", errorData);
+//       return res.status(500).send("Failed to exchange authorization code.");
+//     }
 
-app.get("/callback", async (req, res) => {
-  const { code, state } = req.query;
+//     const tokenData = await tokenResponse.json();
+//     console.log("Token Response:", tokenData);
 
-  console.log("Authorization Code Received:", code);
-  console.log("State Received:", state);
+//     // Store tokens in the session
+//     req.session.tokens = tokenData;
 
-  // Validate the state parameter
-  if (state !== req.session.state) {
-    return res.status(400).send("Invalid state parameter.");
-  }
-
-  try {
-    // Exchange the authorization code for tokens
-    const tokenResponse = await fetch(`${ISSUER_URI}/v1/token`, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        grant_type: "authorization_code",
-        client_id: CLIENT_ID,
-        client_secret: CLIENT_SECRET,
-        redirect_uri: "http://localhost:3000/callback",
-        code: code,
-      }),
-    });
-
-    if (!tokenResponse.ok) {
-      const errorData = await tokenResponse.text();
-      console.error("Token Exchange Failed:", errorData);
-      return res.status(500).send("Failed to exchange authorization code.");
-    }
-
-    const tokenData = await tokenResponse.json();
-    console.log("Token Response:", tokenData);
-
-    // Store tokens in the session
-    req.session.tokens = tokenData;
-
-    // Redirect back to the frontend
-    res.redirect("http://localhost:4300");
-  } catch (error) {
-    console.error("Error during token exchange:", error.message);
-    res.status(500).send("An unexpected error occurred.");
-  }
-});
+//     // Redirect back to the frontend
+//     res.redirect("http://localhost:4300");
+//   } catch (error) {
+//     console.error("Error during token exchange:", error.message);
+//     res.status(500).send("An unexpected error occurred.");
+//   }
+// });
 
 app.get("/tokens", (req, res) => {
   if (!req.session.tokens) {
@@ -229,52 +187,6 @@ app.get("/tokens", (req, res) => {
     expires_in: req.session.tokens.expires_in,
   });
 });
-
-
-// app.get("/tokens", async (req, res) => {
-//   const { authCode } = req.session;
-
-//   if (!authCode) {
-//     return res.status(400).send("Authorization code is missing or expired.");
-//   }
-
-//   try {
-     // Exchange the authorization code for tokens
-//     const tokenResponse = await fetch(`${ISSUER_URI}/v1/token`, {
-//       method: "POST",
-//       headers: { "Content-Type": "application/x-www-form-urlencoded" },
-//       body: new URLSearchParams({
-//         grant_type: "authorization_code",
-//         client_id: CLIENT_ID,
-//         client_secret: CLIENT_SECRET,
-//         redirect_uri: REDIRECT_URI,
-//         code: authCode,
-//       }),
-//     });
-
-//     if (!tokenResponse.ok) {
-//       const errorData = await tokenResponse.text();
-//       console.error("Token Exchange Failed:", errorData);
-//       return res.status(500).send("Failed to exchange authorization code.");
-//     }
-
-//     const tokenData = await tokenResponse.json();
-//     console.log("Token Response:", tokenData);
-
-//     // Clear the authorization code from the session
-//     req.session.authCode = null;
-
-//     // Return tokens to the client
-//     res.json({
-//       access_token: tokenData.access_token,
-//       id_token: tokenData.id_token,
-//       expires_in: tokenData.expires_in,
-//     });
-//   } catch (error) {
-//     console.error("Error during token exchange:", error.message);
-//     res.status(500).send("An unexpected error occurred.");
-//   }
-// });
 
 
 const PORT = process.env.PORT || 3000;
